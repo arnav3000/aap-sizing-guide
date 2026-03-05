@@ -23,7 +23,6 @@ class AAP26SizingCalculator:
     # Red Hat official benchmarked constants (from Excel reference)
     MEMORY_PER_FORK_MB = 100  # Memory consumed per parallel fork
     FORKS_PER_CPU = 4  # Number of forks one CPU core can handle
-    EVENTS_PER_TASK = 10  # Average events generated per task (with loops)
     EVENT_SIZE_KB = 2  # Event size in database (debug mode)
     FACTS_SIZE_PER_HOST_KB = 50  # Inventory facts per host
     EE_AVERAGE_SIZE_MB = 1600  # Execution Environment image size
@@ -31,6 +30,23 @@ class AAP26SizingCalculator:
     MEMORY_PER_EVENT_FORK_MB = 0.0124  # Memory for event processing
     CPU_PER_EVENT_FORK = 0.00011  # CPU for event processing
     API_CALLS_PER_CONTROLLER = 100  # Concurrent API calls supported
+
+    # Verbosity level impact on events per task (CRITICAL for control plane sizing)
+    VERBOSITY_EVENTS_PER_TASK = {
+        0: 4,   # Minimal output (-60% events vs baseline)
+        1: 6,   # Normal/default (baseline)
+        2: 12,  # Verbose (+100% events)
+        3: 34,  # Debug (+467% events)
+        4: 50   # Connection debug (+733% events)
+    }
+
+    # Peak concurrency patterns (CRITICAL for realistic sizing)
+    PEAK_CONCURRENCY_MULTIPLIERS = {
+        'distributed_24x7': 1.0,      # Even distribution 24/7
+        'business_hours': 2.5,        # 9-5 concentration (8 hours)
+        'batch_window': 10.0,         # 2-4 hour batch window
+        'mixed': 1.5                  # Mixed pattern
+    }
 
     # Standard node base reservations
     BASE_MEMORY_GB_PER_NODE = 2  # Base memory reservation per node
@@ -45,27 +61,122 @@ class AAP26SizingCalculator:
         'iops': 3000
     }
 
+    # Input validation ranges
+    VALIDATION_RANGES = {
+        'tasks_per_job': {'min': 1, 'max': 500, 'typical_min': 5, 'typical_max': 200},
+        'job_duration_hours': {'min': 0.01, 'max': 24, 'typical_min': 0.02, 'typical_max': 2.0},
+        'forks_observed': {'min': 1, 'max': 500, 'typical_min': 1, 'typical_max': 50},
+        'managed_hosts': {'min': 1, 'max': 1000000, 'typical_min': 100, 'typical_max': 100000},
+        'playbooks_per_day_peak': {'min': 1, 'max': 10000000, 'typical_min': 100, 'typical_max': 500000},
+    }
+
     def __init__(self):
-        pass
+        self.warnings = []
+
+    def validate_input(self, param_name: str, value: float, context: str = "") -> list:
+        """
+        Validate input parameter and return warnings if value seems unusual.
+
+        Returns list of warning messages.
+        """
+        warnings = []
+
+        if param_name not in self.VALIDATION_RANGES:
+            return warnings
+
+        ranges = self.VALIDATION_RANGES[param_name]
+
+        # Check absolute limits
+        if value < ranges['min'] or value > ranges['max']:
+            warnings.append(
+                f"⚠️ {param_name} value ({value}) is outside valid range "
+                f"({ranges['min']}-{ranges['max']}). {context}"
+            )
+
+        # Check typical ranges (warnings, not errors)
+        elif value < ranges['typical_min'] or value > ranges['typical_max']:
+            warnings.append(
+                f"ℹ️ {param_name} value ({value}) is outside typical range "
+                f"({ranges['typical_min']}-{ranges['typical_max']}). "
+                f"This may indicate unusual workload. {context}"
+            )
+
+        return warnings
+
+    def validate_results(self, execution: Dict[str, Any], controller: Dict[str, Any],
+                        database: Dict[str, Any]) -> list:
+        """
+        Validate calculation results and return warnings for unusual patterns.
+
+        Returns list of warning messages.
+        """
+        warnings = []
+
+        # Control plane shouldn't dominate execution plane
+        if controller['total_memory_gb'] > execution['total_memory_gb'] * 2:
+            warnings.append(
+                f"⚠️ HIGH SEVERITY: Control plane memory ({controller['total_memory_gb']} GB) "
+                f"> 2× execution plane ({execution['total_memory_gb']} GB). "
+                f"This is unusual. Verify 'tasks per job' ({controller.get('events_per_task', 'N/A')} events/task) "
+                f"and 'verbosity level' ({controller.get('verbosity_level', 'N/A')}) inputs."
+            )
+
+        # Database shouldn't be too small for production
+        if database['storage_gb'] < 100:
+            warnings.append(
+                f"ℹ️ Database storage ({database['storage_gb']} GB) < 100 GB seems low for production. "
+                f"Verify retention period and job volume. Consider 2x buffer for growth."
+            )
+
+        # Too many execution pods might indicate incorrect peak pattern
+        if execution['execution_pods'] > 50:
+            warnings.append(
+                f"ℹ️ {execution['execution_pods']} execution pods is very large. "
+                f"Peak pattern: {execution.get('peak_pattern', 'unknown')} ({execution.get('peak_multiplier', '?')}x). "
+                f"Consider automation mesh for distributed execution."
+            )
+
+        # Execution pods too few for high workload
+        if execution['execution_pods'] < 2 and execution.get('forks_needed', 0) > 100:
+            warnings.append(
+                f"⚠️ Only {execution['execution_pods']} execution pods for {execution.get('forks_needed', 0)} forks "
+                f"may cause resource contention. Consider adding more pods."
+            )
+
+        return warnings
 
     def calculate_execution_forks(self, number_of_hosts: int, jobs_per_host_per_day: float,
-                                  job_duration_hours: float, allowed_hours_per_day: int = 24) -> float:
+                                  job_duration_hours: float, allowed_hours_per_day: int = 24,
+                                  peak_pattern: str = 'distributed_24x7') -> float:
         """
         Calculate needed forks for parallel execution using time-based formula.
 
         Formula: forks = (hosts × jobs_per_host_per_day × job_duration_hours) / allowed_hours_per_day
+                        × peak_pattern_multiplier
 
         This accounts for how many jobs need to run concurrently based on:
         - Total daily job volume
         - How long each job takes
         - Time window available for execution
+        - Peak concurrency pattern (CRITICAL for accuracy!)
+
+        Peak patterns:
+        - distributed_24x7: Even distribution (multiplier: 1.0)
+        - business_hours: 9-5 concentration (multiplier: 2.5)
+        - batch_window: 2-4 hour batch (multiplier: 10.0)
+        - mixed: Mixed pattern (multiplier: 1.5)
         """
-        forks_needed = (
+        base_forks = (
             number_of_hosts *
             jobs_per_host_per_day *
             job_duration_hours /
             allowed_hours_per_day
         )
+
+        # Apply peak pattern multiplier (CRITICAL for realistic sizing)
+        multiplier = self.PEAK_CONCURRENCY_MULTIPLIERS.get(peak_pattern, 1.0)
+        forks_needed = base_forks * multiplier
+
         return forks_needed
 
     def calculate_execution_memory(self, forks_needed: float, number_of_nodes: int) -> float:
@@ -95,18 +206,27 @@ class AAP26SizingCalculator:
 
     def calculate_event_forks(self, number_of_hosts: int, jobs_per_host_per_day: float,
                              tasks_per_job: int, job_duration_hours: float,
-                             allowed_hours_per_day: int = 24) -> float:
+                             allowed_hours_per_day: int = 24, verbosity_level: int = 1) -> float:
         """
         Calculate event forks that need to be processed in parallel.
 
         Formula: event_forks = hosts × jobs_per_host_per_day × tasks_per_job ×
                               events_per_task × job_duration_hours / allowed_hours_per_day
+
+        Verbosity level significantly impacts event generation:
+        - Level 0 (minimal): 4 events/task
+        - Level 1 (normal): 6 events/task (default)
+        - Level 2 (verbose): 12 events/task
+        - Level 3 (debug): 34 events/task
+        - Level 4 (connection): 50 events/task
         """
+        events_per_task = self.VERBOSITY_EVENTS_PER_TASK.get(verbosity_level, 6)
+
         event_forks = (
             number_of_hosts *
             jobs_per_host_per_day *
             tasks_per_job *
-            self.EVENTS_PER_TASK *
+            events_per_task *
             job_duration_hours /
             allowed_hours_per_day
         )
@@ -175,11 +295,13 @@ class AAP26SizingCalculator:
         db_inventory_mb = (number_of_hosts * self.FACTS_SIZE_PER_HOST_KB) / 1024
 
         # Jobs storage (MAIN COMPONENT)
+        # Use verbosity level 1 (6 events/task) as baseline for database sizing
+        baseline_events_per_task = 6  # Normal verbosity level
         db_jobs_mb = (
             number_of_hosts *
             jobs_per_host_per_day *
             tasks_per_job *
-            self.EVENTS_PER_TASK *
+            baseline_events_per_task *
             days_to_keep_jobs *
             self.EVENT_SIZE_KB
         ) / 1024
@@ -217,13 +339,21 @@ class AAP26SizingCalculator:
         tasks_per_job = current_metrics.get('tasks_per_job', 100)
         job_duration_hours = current_metrics.get('job_duration_hours', 0.25)  # 15 minutes default
         allowed_hours_per_day = current_metrics.get('allowed_hours_per_day', 24)  # 24/7 default
+        peak_pattern = current_metrics.get('peak_pattern', 'distributed_24x7')  # NEW: Peak concurrency pattern
 
-        # Calculate forks needed
+        # Validate inputs and collect warnings
+        self.warnings.extend(self.validate_input('job_duration_hours', job_duration_hours,
+                                                  "Typical jobs: 5-60 minutes"))
+        self.warnings.extend(self.validate_input('managed_hosts', managed_hosts))
+        self.warnings.extend(self.validate_input('playbooks_per_day_peak', playbooks_per_day))
+
+        # Calculate forks needed with peak pattern multiplier
         forks_needed = self.calculate_execution_forks(
             managed_hosts,
             jobs_per_host_per_day,
             job_duration_hours,
-            allowed_hours_per_day
+            allowed_hours_per_day,
+            peak_pattern  # NEW: Apply peak pattern
         )
 
         # Start with minimum 2 nodes for HA
@@ -250,6 +380,9 @@ class AAP26SizingCalculator:
             cpu_per_pod = math.ceil(cpu_total / execution_nodes)
             memory_per_pod = math.ceil(memory_total_gb / execution_nodes)
 
+        # Get peak pattern multiplier for display
+        peak_multiplier = self.PEAK_CONCURRENCY_MULTIPLIERS.get(peak_pattern, 1.0)
+
         return {
             'execution_pods': execution_nodes,
             'cpu_per_pod': math.ceil(cpu_per_pod),
@@ -258,7 +391,9 @@ class AAP26SizingCalculator:
             'total_memory_gb': math.ceil(memory_total_gb),
             'forks_needed': round(forks_needed, 2),
             'jobs_per_host_per_day': round(jobs_per_host_per_day, 2),
-            'note': f'Time-based calculation: {managed_hosts} hosts × {round(jobs_per_host_per_day, 2)} jobs/host/day × {job_duration_hours}h job / {allowed_hours_per_day}h day = {round(forks_needed, 2)} forks'
+            'peak_pattern': peak_pattern,
+            'peak_multiplier': peak_multiplier,
+            'note': f'Time-based calculation with peak pattern ({peak_pattern}, {peak_multiplier}x): {managed_hosts} hosts × {round(jobs_per_host_per_day, 2)} jobs/host/day × {job_duration_hours}h job / {allowed_hours_per_day}h day × {peak_multiplier} = {round(forks_needed, 2)} forks'
         }
 
     def calculate_controller_resources(self, current_metrics: Dict[str, Any]) -> Dict[str, Any]:
@@ -275,6 +410,13 @@ class AAP26SizingCalculator:
         job_duration_hours = current_metrics.get('job_duration_hours', 0.25)
         allowed_hours_per_day = current_metrics.get('allowed_hours_per_day', 24)
         average_forks_per_job = current_metrics.get('forks_observed', 5)
+        verbosity_level = current_metrics.get('verbosity_level', 1)  # NEW: Verbosity level (0-4)
+
+        # Validate inputs (CRITICAL for control plane accuracy)
+        self.warnings.extend(self.validate_input('tasks_per_job', tasks_per_job,
+                                                  "Typical playbooks: 10-100 tasks"))
+        self.warnings.extend(self.validate_input('forks_observed', average_forks_per_job,
+                                                  "Typical forks: 5-25"))
 
         # Calculate jobs per host per day
         if managed_hosts > 0:
@@ -285,14 +427,18 @@ class AAP26SizingCalculator:
         # Start with 2 control nodes for HA
         control_nodes = 2
 
-        # Step 1: Calculate event processing capacity
+        # Step 1: Calculate event processing capacity with verbosity level
         event_forks = self.calculate_event_forks(
             managed_hosts,
             jobs_per_host_per_day,
             tasks_per_job,
             job_duration_hours,
-            allowed_hours_per_day
+            allowed_hours_per_day,
+            verbosity_level  # NEW: Use verbosity level
         )
+
+        # Get events per task for display
+        events_per_task = self.VERBOSITY_EVENTS_PER_TASK.get(verbosity_level, 6)
 
         memory_for_events = self.calculate_control_memory_for_events(event_forks, control_nodes)
         cpu_for_events = self.calculate_control_cpu_for_events_avg(event_forks, control_nodes)
@@ -330,6 +476,8 @@ class AAP26SizingCalculator:
             'total_memory_gb': math.ceil(memory_control_gb),
             'event_forks': round(event_forks, 2),
             'forks_for_jobs': round(forks_for_jobs, 2),
+            'verbosity_level': verbosity_level,
+            'events_per_task': events_per_task,
             'calculation_breakdown': {
                 'event_processing': {
                     'memory_gb': round(memory_for_events, 2),
@@ -344,7 +492,7 @@ class AAP26SizingCalculator:
                     'cpu': round(cpu_control, 2)
                 }
             },
-            'note': 'Control plane uses AVERAGED result of event processing AND job management capacity'
+            'note': f'Control plane uses AVERAGED result. Verbosity level {verbosity_level} generates {events_per_task} events/task'
         }
 
     def calculate_database_resources(self, current_metrics: Dict[str, Any]) -> Dict[str, Any]:
@@ -509,8 +657,11 @@ class AAP26SizingCalculator:
     def generate_sizing_recommendation(self, current_metrics: Dict[str, Any]) -> Dict[str, Any]:
         """
         Generate complete sizing recommendation for AAP 2.6 based on AAP 2.4 metrics.
-        Uses official Red Hat Excel reference formulas.
+        Uses official Red Hat Excel reference formulas with enhanced accuracy validation.
         """
+        # Clear any previous warnings
+        self.warnings = []
+
         # Calculate resources for each component
         gateway = self.calculate_gateway_resources(current_metrics)
         controller = self.calculate_controller_resources(current_metrics)
@@ -540,6 +691,10 @@ class AAP26SizingCalculator:
             eda['total_memory_gb'] +
             redis['total_memory_gb']
         )
+
+        # Validate results and add warnings
+        results_warnings = self.validate_results(execution, controller, database)
+        all_warnings = self.warnings + results_warnings
 
         # Determine topology
         managed_hosts = current_metrics.get('managed_hosts', 0)
@@ -576,13 +731,14 @@ class AAP26SizingCalculator:
             },
             'formulas_used': {
                 'source': 'Red Hat AAP Excel Reference Sheet (AAp-sizing-sheet-reference.xlsx)',
-                'execution_forks': 'hosts × jobs_per_host_per_day × job_duration_hours / allowed_hours_per_day',
+                'execution_forks': 'hosts × jobs_per_host_per_day × job_duration_hours / allowed_hours_per_day × peak_multiplier',
                 'execution_memory': 'forks × 100MB / 1024 + 2GB × nodes',
                 'execution_cpu': '2 × nodes + forks / 4 / 10 (averaged)',
                 'control_plane': 'AVERAGE of (event_processing + job_management) / 2',
-                'event_forks': 'hosts × jobs_per_host_per_day × tasks_per_job × 10 events/task × duration / allowed_hours',
-                'database_storage': 'hosts × jobs_per_host_per_day × tasks_per_job × 10 events × retention_days × 2KB / 1024'
+                'event_forks': 'hosts × jobs_per_host_per_day × tasks_per_job × events/task (verbosity-based) × duration / allowed_hours',
+                'database_storage': 'hosts × jobs_per_host_per_day × tasks_per_job × events/task × retention_days × 2KB / 1024'
             },
+            'warnings': all_warnings,  # NEW: Include validation warnings
             'deployment_notes': self._get_deployment_notes(current_metrics, execution, controller)
         }
 
