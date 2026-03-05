@@ -70,13 +70,12 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     function displayResults(result) {
-        const { workload_tier, topology_recommendation, components, summary, deployment_notes } = result;
+        const { topology, components, summary, deployment_notes } = result;
 
         let html = `
             <div class="topology-info">
                 <h3>Recommended Topology</h3>
-                <span class="topology-badge ${workload_tier}">${formatTier(workload_tier)}</span>
-                <p style="margin-top: 15px;">${topology_recommendation}</p>
+                <span class="topology-badge ${topology}">${formatTier(topology)}</span>
             </div>
 
             <div class="summary-grid">
@@ -242,6 +241,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function formatTier(tier) {
+        if (!tier) return 'Unknown';
         return tier
             .split('_')
             .map(word => word.charAt(0).toUpperCase() + word.slice(1))
