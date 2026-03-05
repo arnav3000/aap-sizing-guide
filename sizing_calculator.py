@@ -1,7 +1,7 @@
 """
 AAP 2.4 to 2.6 Sizing Calculator
 Calculates recommended container resources for AAP 2.6 based on AAP 2.4 VM metrics
-Using Official Red Hat Capacity Formulas
+Using Official Red Hat Excel Reference Formulas
 """
 
 import math
@@ -13,42 +13,29 @@ class AAP26SizingCalculator:
     Calculates sizing recommendations for AAP 2.6 container deployment
     based on AAP 2.4 VM metrics and workload characteristics.
 
-    Uses official Red Hat formulas:
-    - Execution Capacity = (Concurrent Jobs × Forks) + (Concurrent Jobs × 1)
-    - Capacity per Node (4 vCPU/16GB) = 137 units
-    - Memory per Fork = 100MB
-    - Control Capacity = Maximum concurrent jobs to manage
+    Uses official Red Hat formulas from Excel reference:
+    - Time-based concurrency: forks = hosts × jobs_per_hostday × job_duration / allowed_hours
+    - Memory: (forks × 100MB) / 1024 + 2GB × nodes
+    - CPU (AVG): 2 × nodes + forks / 4 / 10
+    - Control plane: AVERAGE of event processing AND job management
     """
 
-    # Red Hat official capacity constants
-    CAPACITY_PER_NODE = 137  # Capacity units for 4 vCPU / 16GB node
-    MEMORY_PER_FORK_MB = 100  # MB per fork
-    MEMORY_RESERVATION_GB = 2  # Base memory reservation
-    FORKS_PER_CPU = 4  # Baseline forks per CPU core
-    DEFAULT_FORKS = 5  # Default fork value for jobs
+    # Red Hat official benchmarked constants (from Excel reference)
+    MEMORY_PER_FORK_MB = 100  # Memory consumed per parallel fork
+    FORKS_PER_CPU = 4  # Number of forks one CPU core can handle
+    EVENTS_PER_TASK = 10  # Average events generated per task (with loops)
+    EVENT_SIZE_KB = 2  # Event size in database (debug mode)
+    FACTS_SIZE_PER_HOST_KB = 50  # Inventory facts per host
+    EE_AVERAGE_SIZE_MB = 1600  # Execution Environment image size
+    CONTROLLER_EVENTS_PER_SEC = 400  # Events processed per second
+    MEMORY_PER_EVENT_FORK_MB = 0.0124  # Memory for event processing
+    CPU_PER_EVENT_FORK = 0.00011  # CPU for event processing
+    API_CALLS_PER_CONTROLLER = 100  # Concurrent API calls supported
 
-    # Reference workload metrics from Red Hat documentation
-    GROWTH_TOPOLOGY = {
-        'rps': 8,
-        'hosts': 1000,
-        'job_start_rate': 20,
-        'concurrent_jobs_default_forks': 10,
-        'concurrent_jobs_fork1': 100,
-        'events_per_second': 10000,
-        'jobs_per_day': 500,
-        'retention_days': 30
-    }
-
-    ENTERPRISE_TOPOLOGY = {
-        'rps': 16,
-        'hosts': 10000,
-        'job_start_rate': 80,
-        'concurrent_jobs_default_forks': 40,
-        'concurrent_jobs_fork1': 400,
-        'events_per_second': 40000,
-        'jobs_per_day': 2000,
-        'retention_days': 7
-    }
+    # Standard node base reservations
+    BASE_MEMORY_GB_PER_NODE = 2  # Base memory reservation per node
+    BASE_CPU_PER_EXECUTION_NODE = 2  # Base CPU per execution node
+    BASE_CPU_PER_CONTROL_NODE = 1.6  # Base CPU per control node
 
     # Standard node specifications
     STANDARD_NODE_SPEC = {
@@ -61,178 +48,334 @@ class AAP26SizingCalculator:
     def __init__(self):
         pass
 
-    def calculate_database_storage(self, jobs_per_day: int, retention_days: int,
-                                   events_per_job: int = 500, event_size_kb: int = 2) -> int:
+    def calculate_execution_forks(self, number_of_hosts: int, jobs_per_host_per_day: float,
+                                  job_duration_hours: float, allowed_hours_per_day: int = 24) -> float:
         """
-        Calculate database storage requirements in GB.
-        Formula: Event_Size × Events_Per_Run × Jobs_Per_Day × Retention_Days
+        Calculate needed forks for parallel execution using time-based formula.
+
+        Formula: forks = (hosts × jobs_per_host_per_day × job_duration_hours) / allowed_hours_per_day
+
+        This accounts for how many jobs need to run concurrently based on:
+        - Total daily job volume
+        - How long each job takes
+        - Time window available for execution
         """
-        storage_kb = event_size_kb * events_per_job * jobs_per_day * retention_days
-        storage_gb = math.ceil(storage_kb / (1024 * 1024))
-        return max(storage_gb, 60)  # Minimum 60GB
+        forks_needed = (
+            number_of_hosts *
+            jobs_per_host_per_day *
+            job_duration_hours /
+            allowed_hours_per_day
+        )
+        return forks_needed
 
-    def analyze_workload_tier(self, current_metrics: Dict[str, Any]) -> str:
+    def calculate_execution_memory(self, forks_needed: float, number_of_nodes: int) -> float:
         """
-        Determine if workload fits growth or enterprise topology based on metrics.
+        Calculate execution node memory using Red Hat's fork-based formula.
+
+        Formula: memory_gb = (forks_needed × 100MB) / 1024 + (2GB × number_of_nodes)
         """
-        jobs_per_day = current_metrics.get('playbooks_per_day_peak', 0)
-        concurrent_jobs = current_metrics.get('concurrent_jobs_peak', 0)
-        managed_hosts = current_metrics.get('managed_hosts', 0)
+        memory_gb = (forks_needed * self.MEMORY_PER_FORK_MB) / 1024
+        memory_total_gb = memory_gb + (self.BASE_MEMORY_GB_PER_NODE * number_of_nodes)
+        return memory_total_gb
 
-        # Score against enterprise topology
-        enterprise_score = 0
-
-        if jobs_per_day > 20000:  # Exceeds growth capacity significantly
-            enterprise_score += 3
-        elif jobs_per_day > 5000:
-            enterprise_score += 2
-        elif jobs_per_day > 2000:
-            enterprise_score += 1
-
-        if concurrent_jobs > 200:
-            enterprise_score += 3
-        elif concurrent_jobs > 100:
-            enterprise_score += 2
-        elif concurrent_jobs > 50:
-            enterprise_score += 1
-
-        if managed_hosts > 20000:
-            enterprise_score += 3
-        elif managed_hosts > 5000:
-            enterprise_score += 2
-        elif managed_hosts > 2000:
-            enterprise_score += 1
-
-        if enterprise_score >= 5:
-            return 'enterprise'
-        elif enterprise_score >= 3:
-            return 'enterprise_recommended'
-        else:
-            return 'growth'
-
-    def calculate_execution_capacity(self, concurrent_jobs: int, forks_per_job: int = None) -> int:
+    def calculate_execution_cpu_avg(self, forks_needed: float, number_of_nodes: int) -> float:
         """
-        Calculate execution capacity using Red Hat's official formula.
+        Calculate execution node CPU using AVERAGED formula (realistic).
 
-        Formula: Capacity = (Concurrent Jobs × Forks) + (Concurrent Jobs × 1 base task)
+        Formula: cpu_avg = 2 × number_of_nodes + forks_needed / 4 / 10
 
-        Returns: Required capacity units
+        The /10 divisor accounts for average vs peak load.
+        Do NOT use the MAX formula (forks / 4) as it's typically too high.
         """
-        if forks_per_job is None:
-            forks_per_job = self.DEFAULT_FORKS
+        cpu_avg = (
+            self.BASE_CPU_PER_EXECUTION_NODE * number_of_nodes +
+            forks_needed / self.FORKS_PER_CPU / 10
+        )
+        return cpu_avg
 
-        capacity = (concurrent_jobs * forks_per_job) + (concurrent_jobs * 1)
-        return capacity
-
-    def calculate_execution_memory(self, concurrent_jobs: int, forks_per_job: int = None) -> int:
+    def calculate_event_forks(self, number_of_hosts: int, jobs_per_host_per_day: float,
+                             tasks_per_job: int, job_duration_hours: float,
+                             allowed_hours_per_day: int = 24) -> float:
         """
-        Calculate memory needed for execution using Red Hat's fork-based formula.
+        Calculate event forks that need to be processed in parallel.
 
-        Formula: Memory = (Total Forks × 100MB) + 2GB reservation
-
-        Returns: Memory in GB
+        Formula: event_forks = hosts × jobs_per_host_per_day × tasks_per_job ×
+                              events_per_task × job_duration_hours / allowed_hours_per_day
         """
-        if forks_per_job is None:
-            forks_per_job = self.DEFAULT_FORKS
+        event_forks = (
+            number_of_hosts *
+            jobs_per_host_per_day *
+            tasks_per_job *
+            self.EVENTS_PER_TASK *
+            job_duration_hours /
+            allowed_hours_per_day
+        )
+        return event_forks
 
-        total_forks = concurrent_jobs * forks_per_job
-        memory_mb = (total_forks * self.MEMORY_PER_FORK_MB) + (self.MEMORY_RESERVATION_GB * 1024)
-        memory_gb = math.ceil(memory_mb / 1024)
+    def calculate_control_memory_for_events(self, event_forks: float, number_of_nodes: int) -> float:
+        """
+        Calculate control node memory for event processing.
 
+        Formula: memory_gb = (event_forks × 0.0124MB) / 1024 + (2GB × number_of_nodes)
+        """
+        memory_for_events_mb = event_forks * self.MEMORY_PER_EVENT_FORK_MB
+        memory_gb = memory_for_events_mb / 1024 + (self.BASE_MEMORY_GB_PER_NODE * number_of_nodes)
         return memory_gb
 
-    def calculate_controller_resources(self, current_metrics: Dict[str, Any]) -> Dict[str, Any]:
+    def calculate_control_cpu_for_events_avg(self, event_forks: float, number_of_nodes: int) -> float:
         """
-        Calculate automation controller resources based on control capacity needs.
+        Calculate control node CPU for event processing (AVERAGED).
 
-        Control Capacity = Maximum concurrent jobs to manage
+        Formula: cpu_avg = event_forks × 0.00011 / 10 + (1.6 × number_of_nodes)
         """
-        concurrent_jobs = current_metrics.get('concurrent_jobs_peak', 100)
+        cpu_avg = (
+            event_forks * self.CPU_PER_EVENT_FORK / 10 +
+            self.BASE_CPU_PER_CONTROL_NODE * number_of_nodes
+        )
+        return cpu_avg
 
-        # Control capacity equals max concurrent jobs
-        control_capacity = concurrent_jobs
+    def calculate_control_memory_for_jobs(self, forks_for_jobs: float, number_of_nodes: int) -> float:
+        """
+        Calculate control node memory for job management.
 
-        # Calculate nodes needed (using 137 capacity units per 4vCPU/16GB node)
-        # Control plane needs less capacity than execution, roughly 1:5 ratio
-        control_nodes_needed = max(2, math.ceil(control_capacity / (self.CAPACITY_PER_NODE * 5)))
+        Formula: memory_gb = (forks_for_jobs × 100MB) / 1024 + (2GB × number_of_nodes)
+        """
+        memory_gb = (forks_for_jobs * self.MEMORY_PER_FORK_MB) / 1024
+        memory_total_gb = memory_gb + (self.BASE_MEMORY_GB_PER_NODE * number_of_nodes)
+        return memory_total_gb
 
-        # Use standard 4 vCPU / 16GB spec
-        cpu_per_pod = self.STANDARD_NODE_SPEC['cpu']
-        memory_per_pod = self.STANDARD_NODE_SPEC['memory_gb']
+    def calculate_control_cpu_for_jobs_avg(self, forks_for_jobs: float, number_of_nodes: int) -> float:
+        """
+        Calculate control node CPU for job management (AVERAGED).
+
+        Formula: cpu_avg = 2 × number_of_nodes + forks_for_jobs / 4 / 10
+        """
+        cpu_avg = (
+            self.BASE_CPU_PER_EXECUTION_NODE * number_of_nodes +
+            forks_for_jobs / self.FORKS_PER_CPU / 10
+        )
+        return cpu_avg
+
+    def calculate_database_storage(self, number_of_hosts: int, jobs_per_host_per_day: float,
+                                  tasks_per_job: int, days_to_keep_jobs: int) -> Dict[str, Any]:
+        """
+        Calculate database storage requirements.
+
+        Formula:
+        - Facts: hosts × 50KB / 1024 (MB)
+        - Inventory: hosts × 50KB / 1024 (MB)
+        - Jobs: hosts × jobs_per_host_per_day × tasks_per_job × events_per_task ×
+                days_to_keep_jobs × 2KB / 1024 (MB)
+        - Total: (Facts + Inventory + Jobs) / 1024 (GB)
+        """
+        # Facts storage
+        db_facts_mb = (number_of_hosts * self.FACTS_SIZE_PER_HOST_KB) / 1024
+
+        # Inventory storage (similar to facts)
+        db_inventory_mb = (number_of_hosts * self.FACTS_SIZE_PER_HOST_KB) / 1024
+
+        # Jobs storage (MAIN COMPONENT)
+        db_jobs_mb = (
+            number_of_hosts *
+            jobs_per_host_per_day *
+            tasks_per_job *
+            self.EVENTS_PER_TASK *
+            days_to_keep_jobs *
+            self.EVENT_SIZE_KB
+        ) / 1024
+
+        # Total database size
+        db_total_gb = (db_facts_mb + db_inventory_mb + db_jobs_mb) / 1024
 
         return {
-            'control_plane_pods': control_nodes_needed,
-            'cpu_per_pod': cpu_per_pod,
-            'memory_per_pod_gb': memory_per_pod,
-            'total_cpu': control_nodes_needed * cpu_per_pod,
-            'total_memory_gb': control_nodes_needed * memory_per_pod,
-            'control_capacity': control_capacity,
-            'note': f'Sized for {concurrent_jobs} concurrent job management capacity'
+            'facts_mb': db_facts_mb,
+            'inventory_mb': db_inventory_mb,
+            'jobs_mb': db_jobs_mb,
+            'total_gb': db_total_gb
         }
 
     def calculate_execution_node_resources(self, current_metrics: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Calculate execution node resources using Red Hat's capacity formula.
+        Calculate execution node resources using time-based concurrency formula.
 
-        Formula: Capacity = (Concurrent Jobs × Forks) + (Concurrent Jobs × 1)
-        Capacity per Node = 137 units (for 4 vCPU/16GB node)
+        Uses Excel formulas:
+        - Forks = hosts × jobs_per_hostday × job_duration / allowed_hours
+        - Memory = forks × 100 / 1024 + 2 × nodes
+        - CPU (AVG) = 2 × nodes + forks / 4 / 10
         """
-        concurrent_jobs = current_metrics.get('concurrent_jobs_peak', 100)
-        forks_observed = current_metrics.get('forks_observed', self.DEFAULT_FORKS)
+        # Extract parameters
+        managed_hosts = current_metrics.get('managed_hosts', 0)
+        playbooks_per_day = current_metrics.get('playbooks_per_day_peak', 0)
 
-        # Calculate average forks per job
-        # If user provided forks_observed, use it; otherwise use default
-        avg_forks = forks_observed if forks_observed > 0 else self.DEFAULT_FORKS
+        # Calculate jobs per host per day
+        if managed_hosts > 0:
+            jobs_per_host_per_day = playbooks_per_day / managed_hosts
+        else:
+            jobs_per_host_per_day = 0
 
-        # If forks_observed seems like total forks, derive avg per job
-        if avg_forks > 50:  # Likely total concurrent forks
-            avg_forks = max(self.DEFAULT_FORKS, math.ceil(avg_forks / concurrent_jobs))
+        # Get job characteristics
+        tasks_per_job = current_metrics.get('tasks_per_job', 100)
+        job_duration_hours = current_metrics.get('job_duration_hours', 0.25)  # 15 minutes default
+        allowed_hours_per_day = current_metrics.get('allowed_hours_per_day', 24)  # 24/7 default
 
-        # Calculate execution capacity needed
-        execution_capacity = self.calculate_execution_capacity(concurrent_jobs, avg_forks)
+        # Calculate forks needed
+        forks_needed = self.calculate_execution_forks(
+            managed_hosts,
+            jobs_per_host_per_day,
+            job_duration_hours,
+            allowed_hours_per_day
+        )
 
-        # Calculate nodes needed (137 capacity units per 4vCPU/16GB node)
-        execution_nodes = max(2, math.ceil(execution_capacity / self.CAPACITY_PER_NODE))
+        # Start with minimum 2 nodes for HA
+        execution_nodes = max(2, math.ceil(forks_needed / 50))  # ~50 forks per node as baseline
 
-        # Calculate memory using fork-based formula
-        total_memory_needed = self.calculate_execution_memory(concurrent_jobs, avg_forks)
+        # Calculate memory needed
+        memory_total_gb = self.calculate_execution_memory(forks_needed, execution_nodes)
 
-        # Distribute memory across nodes
-        memory_per_pod = max(16, math.ceil(total_memory_needed / execution_nodes))
+        # Calculate CPU needed (averaged)
+        cpu_total = self.calculate_execution_cpu_avg(forks_needed, execution_nodes)
 
-        # Use standard 4 vCPU spec
-        cpu_per_pod = self.STANDARD_NODE_SPEC['cpu']
+        # Adjust nodes if memory or CPU per node exceeds reasonable limits
+        memory_per_pod = memory_total_gb / execution_nodes
+        cpu_per_pod = cpu_total / execution_nodes
 
-        # Adjust if memory per pod exceeds standard
-        if memory_per_pod > 16:
-            # Need to add more nodes to distribute memory
-            execution_nodes = max(execution_nodes, math.ceil(total_memory_needed / 16))
-            memory_per_pod = 16  # Keep standard size
+        # If memory per pod > 32GB or CPU > 8, add more nodes
+        if memory_per_pod > 32:
+            execution_nodes = math.ceil(memory_total_gb / 32)
+            memory_per_pod = math.ceil(memory_total_gb / execution_nodes)
+            cpu_per_pod = cpu_total / execution_nodes
+
+        if cpu_per_pod > 8:
+            execution_nodes = math.ceil(cpu_total / 8)
+            cpu_per_pod = math.ceil(cpu_total / execution_nodes)
+            memory_per_pod = math.ceil(memory_total_gb / execution_nodes)
 
         return {
             'execution_pods': execution_nodes,
-            'cpu_per_pod': cpu_per_pod,
-            'memory_per_pod_gb': memory_per_pod,
-            'total_cpu': execution_nodes * cpu_per_pod,
-            'total_memory_gb': execution_nodes * memory_per_pod,
-            'execution_capacity': execution_capacity,
-            'avg_forks_per_job': avg_forks,
-            'note': f'Sized for {execution_capacity} capacity units ({concurrent_jobs} jobs × {avg_forks} forks)'
+            'cpu_per_pod': math.ceil(cpu_per_pod),
+            'memory_per_pod_gb': math.ceil(memory_per_pod),
+            'total_cpu': math.ceil(cpu_total),
+            'total_memory_gb': math.ceil(memory_total_gb),
+            'forks_needed': round(forks_needed, 2),
+            'jobs_per_host_per_day': round(jobs_per_host_per_day, 2),
+            'note': f'Time-based calculation: {managed_hosts} hosts × {round(jobs_per_host_per_day, 2)} jobs/host/day × {job_duration_hours}h job / {allowed_hours_per_day}h day = {round(forks_needed, 2)} forks'
+        }
+
+    def calculate_controller_resources(self, current_metrics: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Calculate automation controller control plane resources.
+
+        Control plane needs BOTH event processing AND job management capacity,
+        then uses the AVERAGE of both (as per Excel row 54).
+        """
+        # Extract parameters
+        managed_hosts = current_metrics.get('managed_hosts', 0)
+        playbooks_per_day = current_metrics.get('playbooks_per_day_peak', 0)
+        tasks_per_job = current_metrics.get('tasks_per_job', 100)
+        job_duration_hours = current_metrics.get('job_duration_hours', 0.25)
+        allowed_hours_per_day = current_metrics.get('allowed_hours_per_day', 24)
+        average_forks_per_job = current_metrics.get('forks_observed', 5)
+
+        # Calculate jobs per host per day
+        if managed_hosts > 0:
+            jobs_per_host_per_day = playbooks_per_day / managed_hosts
+        else:
+            jobs_per_host_per_day = 0
+
+        # Start with 2 control nodes for HA
+        control_nodes = 2
+
+        # Step 1: Calculate event processing capacity
+        event_forks = self.calculate_event_forks(
+            managed_hosts,
+            jobs_per_host_per_day,
+            tasks_per_job,
+            job_duration_hours,
+            allowed_hours_per_day
+        )
+
+        memory_for_events = self.calculate_control_memory_for_events(event_forks, control_nodes)
+        cpu_for_events = self.calculate_control_cpu_for_events_avg(event_forks, control_nodes)
+
+        # Step 2: Calculate job management capacity
+        concurrent_jobs = (playbooks_per_day * job_duration_hours) / allowed_hours_per_day
+        forks_for_jobs = concurrent_jobs * average_forks_per_job
+
+        memory_for_jobs = self.calculate_control_memory_for_jobs(forks_for_jobs, control_nodes)
+        cpu_for_jobs = self.calculate_control_cpu_for_jobs_avg(forks_for_jobs, control_nodes)
+
+        # Step 3: AVERAGE both (as per Excel formula)
+        memory_control_gb = (memory_for_events + memory_for_jobs) / 2
+        cpu_control = (cpu_for_events + cpu_for_jobs) / 2
+
+        # Adjust if per-node resources exceed limits
+        memory_per_pod = memory_control_gb / control_nodes
+        cpu_per_pod = cpu_control / control_nodes
+
+        if memory_per_pod > 128:
+            control_nodes = math.ceil(memory_control_gb / 128)
+            memory_per_pod = math.ceil(memory_control_gb / control_nodes)
+            cpu_per_pod = cpu_control / control_nodes
+
+        if cpu_per_pod > 32:
+            control_nodes = math.ceil(cpu_control / 32)
+            cpu_per_pod = math.ceil(cpu_control / control_nodes)
+            memory_per_pod = math.ceil(memory_control_gb / control_nodes)
+
+        return {
+            'control_plane_pods': control_nodes,
+            'cpu_per_pod': math.ceil(cpu_per_pod),
+            'memory_per_pod_gb': math.ceil(memory_per_pod),
+            'total_cpu': math.ceil(cpu_control),
+            'total_memory_gb': math.ceil(memory_control_gb),
+            'event_forks': round(event_forks, 2),
+            'forks_for_jobs': round(forks_for_jobs, 2),
+            'calculation_breakdown': {
+                'event_processing': {
+                    'memory_gb': round(memory_for_events, 2),
+                    'cpu': round(cpu_for_events, 2)
+                },
+                'job_management': {
+                    'memory_gb': round(memory_for_jobs, 2),
+                    'cpu': round(cpu_for_jobs, 2)
+                },
+                'averaged_result': {
+                    'memory_gb': round(memory_control_gb, 2),
+                    'cpu': round(cpu_control, 2)
+                }
+            },
+            'note': 'Control plane uses AVERAGED result of event processing AND job management capacity'
         }
 
     def calculate_database_resources(self, current_metrics: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Calculate database resources based on workload and current utilization.
-        Accounts for connection scaling with worker counts.
+        Calculate database resources based on workload.
         """
-        cpu_percent = current_metrics.get('database_cpu_percent', 90)
+        # Extract parameters
+        managed_hosts = current_metrics.get('managed_hosts', 0)
+        playbooks_per_day = current_metrics.get('playbooks_per_day_peak', 0)
+        tasks_per_job = current_metrics.get('tasks_per_job', 100)
+        days_to_keep_jobs = current_metrics.get('job_retention_hours', 48) / 24
+
+        # Calculate jobs per host per day
+        if managed_hosts > 0:
+            jobs_per_host_per_day = playbooks_per_day / managed_hosts
+        else:
+            jobs_per_host_per_day = 0
+
+        # Calculate storage using Excel formula
+        storage_breakdown = self.calculate_database_storage(
+            managed_hosts,
+            jobs_per_host_per_day,
+            tasks_per_job,
+            math.ceil(days_to_keep_jobs)
+        )
+
+        # Get current utilization if available
+        cpu_percent = current_metrics.get('database_cpu_percent', 50)
         memory_percent = current_metrics.get('database_memory_percent', 35)
         current_db_vcpu = current_metrics.get('database_vcpu', 16)
         current_db_memory = current_metrics.get('database_memory_gb', 128)
-        concurrent_db_requests = current_metrics.get('concurrent_db_requests_peak', 600)
-        db_growth_per_day_gb = current_metrics.get('db_growth_per_day_gb', 200)
-        retention_days = current_metrics.get('job_retention_hours', 48) / 24
-        jobs_per_day = current_metrics.get('playbooks_per_day_peak', 70000)
 
         # Calculate actual used resources
         actual_cpu_used = current_db_vcpu * (cpu_percent / 100)
@@ -242,33 +385,26 @@ class AAP26SizingCalculator:
         recommended_cpu = max(8, math.ceil(actual_cpu_used * 1.3))  # 30% headroom
         recommended_memory = max(32, math.ceil(actual_memory_used * 1.5))  # 50% headroom
 
-        # Calculate storage needs
-        storage_gb = self.calculate_database_storage(
-            jobs_per_day=math.ceil(jobs_per_day / 30) if jobs_per_day > 10000 else jobs_per_day,
-            retention_days=math.ceil(retention_days)
-        )
-
-        # Add observed daily growth
-        storage_with_buffer = math.ceil(storage_gb + (db_growth_per_day_gb * retention_days * 1.2))
-
-        # Calculate connection requirements
-        # Connections scale with number of workers and replicas
-        # Rough estimate: 10 connections per web worker, workers scale with CPU
-        estimated_connections = concurrent_db_requests if concurrent_db_requests > 0 else 200
+        # Storage with 20% buffer
+        storage_with_buffer = math.ceil(storage_breakdown['total_gb'] * 1.2)
 
         return {
             'cpu': recommended_cpu,
             'memory_gb': recommended_memory,
-            'storage_gb': storage_with_buffer,
-            'iops': 3000,  # Minimum required
-            'max_connections': max(200, estimated_connections),
-            'note': 'Consider separate PostgreSQL instances for each component at scale'
+            'storage_gb': max(60, storage_with_buffer),  # Minimum 60GB
+            'iops': 3000,
+            'storage_breakdown': {
+                'facts_mb': round(storage_breakdown['facts_mb'], 2),
+                'inventory_mb': round(storage_breakdown['inventory_mb'], 2),
+                'jobs_mb': round(storage_breakdown['jobs_mb'], 2),
+                'total_gb': round(storage_breakdown['total_gb'], 2)
+            },
+            'note': 'Storage based on jobs history; CPU/Memory based on current utilization with headroom'
         }
 
     def calculate_automation_hub_resources(self, current_metrics: Dict[str, Any]) -> Dict[str, Any]:
         """
         Calculate automation hub resources.
-        Hub is less resource intensive but needs capacity for content sync.
         """
         cpu_percent = current_metrics.get('hub_cpu_percent', 25)
         memory_percent = current_metrics.get('hub_memory_percent', 30)
@@ -294,15 +430,16 @@ class AAP26SizingCalculator:
             'memory_per_pod_gb': memory_per_pod,
             'total_cpu': hub_pods * cpu_per_pod,
             'total_memory_gb': hub_pods * memory_per_pod,
-            'note': 'Add 32GB extra if seeding collections (hub_seed_collections=true)'
+            'note': 'Minimum 2 pods for HA; scale based on collection sync and content serving needs'
         }
 
-    def calculate_gateway_resources(self, workload_tier: str) -> Dict[str, Any]:
+    def calculate_gateway_resources(self, current_metrics: Dict[str, Any]) -> Dict[str, Any]:
         """
         Calculate platform gateway resources.
-        Gateway handles authentication and routing.
         """
-        if workload_tier == 'enterprise':
+        managed_hosts = current_metrics.get('managed_hosts', 0)
+
+        if managed_hosts > 20000:
             gateway_pods = 3  # HA configuration
             cpu_per_pod = 2
             memory_per_pod = 4
@@ -316,16 +453,16 @@ class AAP26SizingCalculator:
             'cpu_per_pod': cpu_per_pod,
             'memory_per_pod_gb': memory_per_pod,
             'total_cpu': gateway_pods * cpu_per_pod,
-            'total_memory_gb': gateway_pods * memory_per_pod
+            'total_memory_gb': gateway_pods * memory_per_pod,
+            'note': 'Gateway handles authentication and routing; 2-3 pods for HA'
         }
 
     def calculate_eda_resources(self, current_metrics: Dict[str, Any]) -> Dict[str, Any]:
         """
         Calculate Event-Driven Ansible resources.
-        Scale based on number of activations.
         """
-        # Basic EDA setup for growth, can be scaled later
-        eda_pods = 2  # Minimum for HA
+        # Basic EDA setup, can be scaled based on activations
+        eda_pods = 2
         cpu_per_pod = 2
         memory_per_pod = 8
 
@@ -338,13 +475,14 @@ class AAP26SizingCalculator:
             'note': 'Scale based on number of activations and event rates'
         }
 
-    def calculate_redis_resources(self, workload_tier: str) -> Dict[str, Any]:
+    def calculate_redis_resources(self, current_metrics: Dict[str, Any]) -> Dict[str, Any]:
         """
         Calculate Redis resources.
-        Clustered for enterprise, standalone for growth.
         """
-        if workload_tier == 'enterprise':
-            # Clustered Redis: 3 primary + 3 replica
+        managed_hosts = current_metrics.get('managed_hosts', 0)
+
+        if managed_hosts > 10000:
+            # Clustered Redis for enterprise
             return {
                 'type': 'clustered',
                 'primary_nodes': 3,
@@ -353,7 +491,8 @@ class AAP26SizingCalculator:
                 'memory_per_node_gb': 4,
                 'total_nodes': 6,
                 'total_cpu': 6,
-                'total_memory_gb': 24
+                'total_memory_gb': 24,
+                'note': 'Clustered Redis (3 primary + 3 replica) for high availability'
             }
         else:
             # Standalone Redis
@@ -361,73 +500,58 @@ class AAP26SizingCalculator:
                 'type': 'standalone',
                 'nodes': 1,
                 'cpu': 1,
-                'memory_gb': 2
+                'memory_gb': 2,
+                'total_cpu': 1,
+                'total_memory_gb': 2,
+                'note': 'Standalone Redis for smaller deployments'
             }
-
-    def calculate_event_processing_rate(self, current_metrics: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Calculate event processing requirements.
-
-        Event generation: 6 events per task per host (at verbosity 1)
-        Formula: Jobs × Average Tasks × Average Hosts × 6 Events
-        """
-        jobs_per_day = current_metrics.get('playbooks_per_day_peak', 500)
-        concurrent_jobs = current_metrics.get('concurrent_jobs_peak', 100)
-
-        # Estimate events per job
-        # Assume ~10 tasks per playbook, ~50 hosts per job on average
-        avg_tasks_per_job = 10
-        avg_hosts_per_job = 50
-        events_per_task = 6  # At verbosity 1
-
-        # Events per job
-        events_per_job = avg_tasks_per_job * avg_hosts_per_job * events_per_task
-
-        # Peak event rate (when all concurrent jobs are running)
-        # Assume each job takes ~60 seconds on average
-        avg_job_duration_sec = 60
-        events_per_second_peak = math.ceil((concurrent_jobs * events_per_job) / avg_job_duration_sec)
-
-        # Daily event volume
-        events_per_day = jobs_per_day * events_per_job
-
-        return {
-            'events_per_job': events_per_job,
-            'events_per_second_peak': events_per_second_peak,
-            'events_per_day': events_per_day,
-            'note': f'Assumes {avg_tasks_per_job} tasks/job, {avg_hosts_per_job} hosts/job, {events_per_task} events/task'
-        }
 
     def generate_sizing_recommendation(self, current_metrics: Dict[str, Any]) -> Dict[str, Any]:
         """
         Generate complete sizing recommendation for AAP 2.6 based on AAP 2.4 metrics.
-        Uses official Red Hat capacity formulas.
+        Uses official Red Hat Excel reference formulas.
         """
-        # Determine workload tier
-        workload_tier = self.analyze_workload_tier(current_metrics)
-
         # Calculate resources for each component
-        gateway = self.calculate_gateway_resources(workload_tier)
+        gateway = self.calculate_gateway_resources(current_metrics)
         controller = self.calculate_controller_resources(current_metrics)
         execution = self.calculate_execution_node_resources(current_metrics)
         database = self.calculate_database_resources(current_metrics)
         hub = self.calculate_automation_hub_resources(current_metrics)
         eda = self.calculate_eda_resources(current_metrics)
-        redis = self.calculate_redis_resources(workload_tier)
-        event_processing = self.calculate_event_processing_rate(current_metrics)
+        redis = self.calculate_redis_resources(current_metrics)
 
         # Calculate totals
-        total_cpu = (gateway['total_cpu'] + controller['total_cpu'] +
-                    execution['total_cpu'] + database['cpu'] +
-                    hub['total_cpu'] + eda['total_cpu'] + redis['total_cpu'])
+        total_cpu = (
+            gateway['total_cpu'] +
+            controller['total_cpu'] +
+            execution['total_cpu'] +
+            database['cpu'] +
+            hub['total_cpu'] +
+            eda['total_cpu'] +
+            redis['total_cpu']
+        )
 
-        total_memory = (gateway['total_memory_gb'] + controller['total_memory_gb'] +
-                       execution['total_memory_gb'] + database['memory_gb'] +
-                       hub['total_memory_gb'] + eda['total_memory_gb'] + redis['total_memory_gb'])
+        total_memory = (
+            gateway['total_memory_gb'] +
+            controller['total_memory_gb'] +
+            execution['total_memory_gb'] +
+            database['memory_gb'] +
+            hub['total_memory_gb'] +
+            eda['total_memory_gb'] +
+            redis['total_memory_gb']
+        )
+
+        # Determine topology
+        managed_hosts = current_metrics.get('managed_hosts', 0)
+        if managed_hosts > 10000:
+            topology = 'enterprise'
+        elif managed_hosts > 5000:
+            topology = 'enterprise_recommended'
+        else:
+            topology = 'growth'
 
         return {
-            'workload_tier': workload_tier,
-            'topology_recommendation': self._get_topology_recommendation(workload_tier),
+            'topology': topology,
             'components': {
                 'platform_gateway': gateway,
                 'automation_controller_control_plane': controller,
@@ -437,80 +561,57 @@ class AAP26SizingCalculator:
                 'event_driven_ansible': eda,
                 'redis': redis
             },
-            'event_processing': event_processing,
             'summary': {
                 'total_cpu': total_cpu,
                 'total_memory_gb': total_memory,
                 'total_storage_gb': database['storage_gb'],
-                'estimated_pods': (gateway['gateway_pods'] + controller['control_plane_pods'] +
-                                 execution['execution_pods'] + hub['hub_pods'] +
-                                 eda['eda_pods'] + redis.get('total_nodes', redis.get('nodes', 1)))
+                'estimated_pods': (
+                    gateway['gateway_pods'] +
+                    controller['control_plane_pods'] +
+                    execution['execution_pods'] +
+                    hub['hub_pods'] +
+                    eda['eda_pods'] +
+                    redis.get('total_nodes', redis.get('nodes', 1))
+                )
             },
-            'calculation_method': {
-                'execution_capacity_formula': f"({current_metrics.get('concurrent_jobs_peak', 0)} jobs × {execution.get('avg_forks_per_job', 5)} forks) + ({current_metrics.get('concurrent_jobs_peak', 0)} × 1) = {execution.get('execution_capacity', 0)} units",
-                'capacity_per_node': f"{self.CAPACITY_PER_NODE} units per 4vCPU/16GB node",
-                'memory_per_fork': f"{self.MEMORY_PER_FORK_MB}MB per fork + {self.MEMORY_RESERVATION_GB}GB reservation",
-                'event_rate_peak': f"{event_processing['events_per_second_peak']} events/second peak"
+            'formulas_used': {
+                'source': 'Red Hat AAP Excel Reference Sheet (AAp-sizing-sheet-reference.xlsx)',
+                'execution_forks': 'hosts × jobs_per_host_per_day × job_duration_hours / allowed_hours_per_day',
+                'execution_memory': 'forks × 100MB / 1024 + 2GB × nodes',
+                'execution_cpu': '2 × nodes + forks / 4 / 10 (averaged)',
+                'control_plane': 'AVERAGE of (event_processing + job_management) / 2',
+                'event_forks': 'hosts × jobs_per_host_per_day × tasks_per_job × 10 events/task × duration / allowed_hours',
+                'database_storage': 'hosts × jobs_per_host_per_day × tasks_per_job × 10 events × retention_days × 2KB / 1024'
             },
-            'deployment_notes': self._get_deployment_notes(workload_tier, current_metrics, execution, event_processing)
+            'deployment_notes': self._get_deployment_notes(current_metrics, execution, controller)
         }
 
-    def _get_topology_recommendation(self, tier: str) -> str:
-        """Get topology recommendation description."""
-        if tier == 'enterprise':
-            return ('Enterprise Topology - Multi-node distributed architecture for production. '
-                   'Provides high availability, independent component scaling, and handles '
-                   '10,000+ hosts, 80+ jobs/second, 40,000 events/second.')
-        elif tier == 'enterprise_recommended':
-            return ('Enterprise Topology Recommended - Your workload is approaching or exceeding '
-                   'growth topology limits. Enterprise topology provides better scalability and HA.')
-        else:
-            return ('Growth Topology - Suitable for getting started or smaller deployments. '
-                   'Handles 1,000 hosts, 20 jobs/second, 10,000 events/second. '
-                   'Can be deployed on fewer resources.')
-
-    def _get_deployment_notes(self, tier: str, metrics: Dict[str, Any],
-                             execution: Dict[str, Any], event_processing: Dict[str, Any]) -> list:
+    def _get_deployment_notes(self, metrics: Dict[str, Any], execution: Dict[str, Any],
+                             controller: Dict[str, Any]) -> list:
         """Generate deployment notes and recommendations."""
         notes = []
 
         # Calculation method note
-        notes.append(f'✓ Calculations use official Red Hat capacity formulas')
-        notes.append(f'✓ Execution capacity: {execution.get("execution_capacity", 0)} units (137 units per 4vCPU/16GB node)')
-        notes.append(f'✓ Memory sizing: {self.MEMORY_PER_FORK_MB}MB per fork + {self.MEMORY_RESERVATION_GB}GB reservation')
+        notes.append('✓ Calculations based on official Red Hat Excel reference formulas')
+        notes.append('✓ Uses time-based concurrency: forks = hosts × jobs/host/day × duration / allowed_hours')
+        notes.append('✓ Control plane uses AVERAGED result of event processing AND job management')
+        notes.append(f'✓ Execution plane: {execution.get("forks_needed", 0)} forks needed')
+        notes.append(f'✓ Control plane: {controller.get("event_forks", 0)} event forks, {controller.get("forks_for_jobs", 0)} job forks')
 
-        # General notes
+        # General recommendations
         notes.append('All values include appropriate headroom for peaks and growth')
         notes.append('Minimum 2 replicas per service recommended for high availability')
+        notes.append('Container deployments typically 20-30% more efficient than VMs')
 
-        # Topology specific notes
-        if tier in ['enterprise', 'enterprise_recommended']:
+        # Specific recommendations
+        managed_hosts = metrics.get('managed_hosts', 0)
+        if managed_hosts > 20000:
             notes.append('Consider separate PostgreSQL instances per component for better isolation')
             notes.append('Use clustered Redis (3 primary + 3 replica) for HA')
             notes.append('Implement load balancing for API endpoints')
 
-        # Event processing notes
-        events_per_sec = event_processing.get('events_per_second_peak', 0)
-        if events_per_sec > 20000:
-            notes.append(f'High event processing rate ({events_per_sec}/sec peak) - ensure adequate control plane capacity')
-        elif events_per_sec > 10000:
-            notes.append(f'Event processing: {events_per_sec} events/sec peak (within enterprise capacity)')
-        else:
-            notes.append(f'Event processing: {events_per_sec} events/sec peak (within growth capacity)')
-
-        # Database notes
-        db_growth = metrics.get('db_growth_per_day_gb', 0)
-        if db_growth > 100:
-            notes.append(f'High database growth rate ({db_growth}GB/day) - consider shorter retention periods')
-
-        # Concurrent jobs note
-        concurrent_jobs = metrics.get('concurrent_jobs_peak', 0)
-        if concurrent_jobs > 400:
-            notes.append(f'High concurrency ({concurrent_jobs} jobs) - execution plane appropriately sized')
-
         # Migration notes
         notes.append('Test in non-production environment before migration')
-        notes.append('Container deployments typically 20-30% more efficient than VMs')
         notes.append('Monitor and adjust resources post-migration based on actual usage')
         notes.append('Validate sizing with Red Hat support for production deployments')
 
@@ -523,37 +624,30 @@ def main():
 
     # Example: User's current AAP 2.4 environment
     current_aap24_metrics = {
-        # Controllers
+        # Managed environment
+        'managed_hosts': 40000,
+
+        # Workload characteristics
+        'playbooks_per_day_peak': 70000,
+        'tasks_per_job': 100,  # Average tasks per playbook
+        'job_duration_hours': 0.25,  # 15 minutes average
+        'allowed_hours_per_day': 24,  # 24/7 operation
+        'job_retention_hours': 48,  # Keep jobs for 2 days
+        'forks_observed': 5,  # Average forks per job
+
+        # Current controllers
         'num_controllers': 12,
-        'controller_cpu_percent_avg': 35,
-        'controller_cpu_percent_peak': 50,
-        'controller_memory_percent': 20,
 
         # Automation Hub
         'num_hub_nodes': 2,
         'hub_cpu_percent': 25,
         'hub_memory_percent': 30,
 
-        # Execution Nodes
-        'num_execution_nodes': 30,
-        'execution_cpu_percent': 90,
-        'execution_memory_percent': 50,
-        'forks_observed': 165,  # Total concurrent forks observed
-
         # Database
         'database_vcpu': 16,
         'database_memory_gb': 128,
         'database_cpu_percent': 90,
         'database_memory_percent': 35,
-        'concurrent_db_requests_peak': 600,
-        'db_growth_per_day_gb': 200,
-
-        # Workload
-        'playbooks_per_day_peak': 70000,
-        'concurrent_jobs_peak': 500,
-        'concurrent_jobs_pending': 30,
-        'job_retention_hours': 48,
-        'managed_hosts': 40000,
     }
 
     recommendation = calculator.generate_sizing_recommendation(current_aap24_metrics)

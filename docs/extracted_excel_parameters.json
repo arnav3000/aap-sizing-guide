@@ -1,0 +1,284 @@
+{
+  "Facts size per host (Kb):": {
+    "value": 50.0,
+    "description": "Default: 50Kb",
+    "note": "roughly `ansible -m debug localhost | wc -c`",
+    "row": 2
+  },
+  "Size per event (Kb):": {
+    "value": 2.0,
+    "description": "Default: 2Kb (in debug mode)",
+    "note": "",
+    "row": 3
+  },
+  "Memory per Fork (Mb):": {
+    "value": 100.0,
+    "description": "Default: 100Mb",
+    "note": "mem_per_fork",
+    "row": 4
+  },
+  "Forks per CPU core:": {
+    "value": 4.0,
+    "description": "Default: 4",
+    "note": "forks_per_cpu",
+    "row": 5
+  },
+  "Capacity Adjustment": {
+    "value": 1.0,
+    "description": "Default: 1.0 (take max of mem_cap and cpu_cap), 0.0 takes min",
+    "note": "capacity_adjustment (per instance)",
+    "row": 6
+  },
+  "Events per Task": {
+    "value": 10.0,
+    "description": "Benchmark: avg. number of events gone through during a task, i.e. roughly tasks with loops",
+    "note": "",
+    "row": 7
+  },
+  "Execution Environment Average Size (Mb)": {
+    "value": 1600.0,
+    "description": "Benchmark",
+    "note": "",
+    "row": 8
+  },
+  "Automation Controller Processed events/s": {
+    "value": 400.0,
+    "description": "Benchmark from engineering performance tests Automation controller with minimum sizing under load",
+    "note": "",
+    "row": 9
+  },
+  "Automation Controller Memory per event fork  (Mb)": {
+    "value": 0.0124,
+    "description": "Benchmark from engineering performance tests Automation controller with minimum sizing under load",
+    "note": "",
+    "row": 10
+  },
+  "Automation Controller CPU per event fork": {
+    "value": 0.00011,
+    "description": "Benchmark from engineering performance tests Automation controller with minimum sizing under load",
+    "note": "",
+    "row": 11
+  },
+  "API call duration": {
+    "value": 0.001388888889,
+    "description": "Default: 5 sec (in hours)",
+    "note": "",
+    "row": 12
+  },
+  "concurrent API calls per controller": {
+    "value": 100.0,
+    "description": "Default: 100 (documentation states that up to 300 are possible, but require monitoring)",
+    "note": "I suspect that this is a one thread process, and is related to single-threaded performance",
+    "row": 13
+  },
+  "Controlled Job per capacity unit": {
+    "value": 1.0,
+    "description": "Default: 1",
+    "note": "AWX_CONTROL_NODE_TASK_IMPACT",
+    "row": 14
+  },
+  "Number of ansible managed hosts/nodes:": {
+    "value": 500.0,
+    "description": "Total number of end hosts/ nodes / devices that the client is planning to manage via Ansible",
+    "note": "",
+    "row": 16
+  },
+  "Number of jobs per host per day:": {
+    "value": 5.0,
+    "description": "e.g. 0.5 if a host is touched each two days, ~0.15 if each host is touched each week once",
+    "note": "",
+    "row": 17
+  },
+  "Tasks per Playbook/Job:": {
+    "value": 100.0,
+    "description": "number of tasks gone through during a run, included/imported tasks via roles/tasks/playbooks",
+    "note": "",
+    "row": 18
+  },
+  "Job duration for one host (hrs):": {
+    "value": 0.25,
+    "description": "e.g. 0.25 for a quarter of an hour duration of a job/playbook",
+    "note": "",
+    "row": 19
+  },
+  "Interval between job polling API calls": {
+    "value": 0.008333333333,
+    "description": "We assume that API calls to poll a job are the most frequent API calls (polling interval in hours)",
+    "note": "",
+    "row": 20
+  },
+  "Allowed hours per day": {
+    "value": 12.0,
+    "description": "i.e. do jobs run only during working hours or unattended all the time?",
+    "note": "",
+    "row": 21
+  },
+  "Average hosts per job": {
+    "value": 5.0,
+    "description": "",
+    "note": "",
+    "row": 22
+  },
+  "Average forks per job": {
+    "value": 5.0,
+    "description": "",
+    "note": "",
+    "row": 23
+  },
+  "EDA - number of rulebook activations": {
+    "value": 7.0,
+    "description": "",
+    "note": "",
+    "row": 77
+  },
+  "EDA - number of events per day": {
+    "value": 140000.0,
+    "description": "",
+    "note": "",
+    "row": 78
+  },
+  "Jobs per day": {
+    "value": 500.0,
+    "description": "",
+    "note": "hosts_quantity * jobs_per_hostday / hosts_per_job",
+    "row": 27
+  },
+  "Job duration": {
+    "value": 0.25,
+    "description": "",
+    "note": "job_duration_per_host * CEILING(hosts_per_job / job_forks)",
+    "row": 28
+  },
+  "Concurrent jobs": {
+    "value": 15000.0,
+    "description": "concurrent jobs",
+    "note": "see above",
+    "row": 50
+  },
+  "API calls per day": {
+    "value": 15000.0,
+    "description": "One polling API call each x hours within the duration of a job",
+    "note": "jobs_per_day * job_duration / polling_interval",
+    "row": 30
+  },
+  "Concurrent API calls": {
+    "value": 1.736111111,
+    "description": "",
+    "note": "api_calls_per_day * api_call_duration / day_work_hours",
+    "row": 31
+  },
+  "Number of execution nodes in the cluster": {
+    "value": 3.0,
+    "description": "Number of nodes in the execution nodes 'mesh' or cluster. Strongly advised to be >= 2 for high availability.",
+    "note": "Execution node sizing criteria depends on:\n- CPU/MEM: number of job executed concurrently, type of task (cpu intensive or mem intensive),\n- Disk capacity: if min. sizing we should not be incur into issue as it is not  disk space massively used. In general storage should be equal to the project size of projects running in parallel.\n- Disk IOPS = min required 1500 IOPS\nIt is possible to tune the fork number to be more (MEM intensive projects) or less (CPU intensive projects) from controller UI",
+    "row": 34
+  },
+  "Needed forks (parallel number of executed tasks)": {
+    "value": 15001.0,
+    "description": "task forks + 1 execution fork per job",
+    "note": "forks = hosts*jobs_per_hostday*job_duration/day_work_hours",
+    "row": 36
+  },
+  "Needed RAM (GB):": {
+    "value": 40.0,
+    "description": "GBytes ",
+    "note": "Averaged from both needed RAM above",
+    "row": 55
+  },
+  "Needed CPU (MAX)": {
+    "value": 15000.0,
+    "description": "cores",
+    "note": "cpus = cpu_capacity / forks_per_cpu (min: 2)",
+    "row": 52
+  },
+  "Needed CPU (AVG)": {
+    "value": 1504.0,
+    "description": "cores",
+    "note": "cpus =  2 * nodes + cpu_capacity / forks_per_cpu / 10",
+    "row": 53
+  },
+  "Number of days to keep jobs:": {
+    "value": 10.0,
+    "description": "Desired rentention to keep jobs for x number of days",
+    "note": "Controller node sizing criteria depends on:\n- CPU: number of events/second received by all the execution nodes. Size of the events (can depend to a specific task configuration i.e. if the task is doing a cat command of a large text file, this will influence the event logged). Controller is busy polling events from redis queue.\n- Disk capacity (for DB):  particularly influenced by Event and event size(related partitioned table). Size should take care of facts, inventory, jobs and event size, and retention per jobs.\n- Disk IOPS = min required 1500 IOPS - generally node is busy reading writing from redis and to db",
+    "row": 43
+  },
+  "Number of control nodes in the cluster": {
+    "value": 2.0,
+    "description": "Number of nodes in the automation controller cluster. Strongly advised to be >= 2 for high availability.",
+    "note": "",
+    "row": 44
+  },
+  "Needed event forks (parallel number of queued events)": {
+    "value": 334.0,
+    "description": "event forks",
+    "note": "event forks = hosts*jobs_per_hostday*tasks_per_job*events per task*job_duration/day_work_hours",
+    "row": 46
+  },
+  "Needed CPU cores (AVG)": {
+    "value": 754.0,
+    "description": "cores",
+    "note": "Averaged from both needed CPU (AVG) above",
+    "row": 56
+  },
+  "Database size for facts:": {
+    "value": 0.009765625,
+    "description": "MBytes ",
+    "note": "'=hosts*facts_size/1024",
+    "row": 58
+  },
+  "Database size for inventory:": {
+    "value": 0.009765625,
+    "description": "MBytes ",
+    "note": "assumed similar to facts\u2019 size",
+    "row": 59
+  },
+  "Database size for jobs:": {
+    "value": 39062.5,
+    "description": "MBytes ",
+    "note": "'=hosts*jobs_per_hostday*events*keep_days*event_size/1024",
+    "row": 60
+  },
+  "Total needed DB estimated size:": {
+    "value": 39.0,
+    "description": "GBytes ",
+    "note": "",
+    "row": 61
+  },
+  "Needed RAM (at the very least!)": {
+    "value": 0.04833984375,
+    "description": "GBytes ",
+    "note": "1.5 MB per connection, 3 connections per concurrent job (4.2, fixed in 4.3)",
+    "row": 62
+  },
+  "Number of execution environments": {
+    "value": 5.0,
+    "description": "Indicates the different EE that the client needs to have to fulfill all its automation use cases",
+    "note": "Automation Hub type of load:\n- CPU/MEM: the min required sizing should be fine as it is not cpu/memory intensive.\n- Network: can be subject to stress during job execution to download the projects \n- Disk IOPS = min required 1500 IOPS",
+    "row": 67
+  },
+  "Number of versions for each EE": {
+    "value": 5.0,
+    "description": "Indicates the versions for each EE type that the client has or estimates (corresponds to the different tags for the same EE )",
+    "note": "",
+    "row": 68
+  },
+  "EE container images version overlap %": {
+    "value": 60.0,
+    "description": "Indicates the % of the image layers which overlap with the previous version. Normally only the remaining layers are consuming storage in the registry.",
+    "note": "",
+    "row": 69
+  },
+  "Size for EE": {
+    "value": 5200.0,
+    "description": "MBytes ",
+    "note": "'=hosts*facts_size/1024",
+    "row": 72
+  },
+  "Total needed storage estimated size:": {
+    "value": 6.0,
+    "description": "GBytes ",
+    "note": "",
+    "row": 73
+  }
+}

@@ -141,6 +141,21 @@
                                 <label for="managed_hosts">Managed Hosts</label>
                                 <input type="number" id="managed_hosts" name="managed_hosts" required min="1">
                             </div>
+                            <div class="form-group">
+                                <label for="tasks_per_job">Tasks per Job (Average)</label>
+                                <input type="number" id="tasks_per_job" name="tasks_per_job" min="1" value="100">
+                                <small>Average number of tasks per playbook</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="job_duration_hours">Job Duration (Hours)</label>
+                                <input type="number" id="job_duration_hours" name="job_duration_hours" min="0.01" step="0.01" value="0.25">
+                                <small>Average job runtime (0.25 = 15 minutes)</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="allowed_hours_per_day">Allowed Hours per Day</label>
+                                <input type="number" id="allowed_hours_per_day" name="allowed_hours_per_day" min="1" max="24" value="24">
+                                <small>Operating window (24 = 24/7, 8 = business hours)</small>
+                            </div>
                         </div>
                     </div>
 

@@ -62,7 +62,7 @@ def get_example_data():
         'num_execution_nodes': 30,
         'execution_cpu_percent': 90,
         'execution_memory_percent': 50,
-        'forks_observed': 165,
+        'forks_observed': 5,
         'database_vcpu': 16,
         'database_memory_gb': 128,
         'database_cpu_percent': 90,
@@ -73,7 +73,10 @@ def get_example_data():
         'concurrent_jobs_peak': 500,
         'concurrent_jobs_pending': 30,
         'job_retention_hours': 48,
-        'managed_hosts': 40000
+        'managed_hosts': 40000,
+        'tasks_per_job': 100,
+        'job_duration_hours': 0.25,
+        'allowed_hours_per_day': 24
     }
     return jsonify(example_data)
 
