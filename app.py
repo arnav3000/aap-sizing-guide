@@ -76,10 +76,13 @@ def get_example_data():
         'managed_hosts': 40000,
         'tasks_per_job': 100,
         'job_duration_hours': 0.25,
-        'allowed_hours_per_day': 24
+        'allowed_hours_per_day': 24,
+        # Phase 1: Advanced parameters
+        'verbosity_level': 1,              # Normal/recommended (6 events/task)
+        'peak_pattern': 'distributed_24x7' # Distributed 24/7 (1.0x multiplier)
     }
     return jsonify(example_data)
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    app.run(debug=True, host='0.0.0.0', port=5002)

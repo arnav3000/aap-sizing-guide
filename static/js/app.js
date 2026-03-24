@@ -70,14 +70,62 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     function displayResults(result) {
-        const { topology, components, summary, deployment_notes } = result;
+        const { topology, components, summary, deployment_notes, warnings } = result;
 
         let html = `
             <div class="topology-info">
                 <h3>Recommended Topology</h3>
                 <span class="topology-badge ${topology}">${formatTier(topology)}</span>
             </div>
+        `;
 
+        // NEW: Display warnings if present
+        if (warnings && warnings.length > 0) {
+            html += `
+                <div class="warnings-section" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0; border-radius: 4px;">
+                    <h4 style="color: #856404; margin-top: 0;">⚠️ Sizing Warnings (${warnings.length})</h4>
+                    <ul style="margin: 10px 0 0 20px; color: #856404;">
+                        ${warnings.map(warning => {
+                            const severity = warning.includes('HIGH SEVERITY') ? 'error' :
+                                           warning.includes('⚠️') ? 'warning' : 'info';
+                            const color = severity === 'error' ? '#721c24' :
+                                        severity === 'warning' ? '#856404' : '#004085';
+                            return `<li style="margin: 8px 0; color: ${color};">${warning}</li>`;
+                        }).join('')}
+                    </ul>
+                </div>
+            `;
+        }
+
+        // NEW: Display calculation parameters used
+        const execution = components.automation_controller_execution_plane;
+        const control = components.automation_controller_control_plane;
+
+        html += `
+            <div class="calculation-params" style="background: #f0f8ff; border-left: 4px solid #007bff; padding: 15px; margin: 20px 0; border-radius: 4px;">
+                <h4 style="color: #004085; margin-top: 0;">📊 Calculation Parameters Used</h4>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 10px;">
+                    <div>
+                        <strong style="color: #004085;">Peak Pattern:</strong>
+                        <span style="background: #007bff; color: white; padding: 2px 8px; border-radius: 3px; font-size: 0.9em; margin-left: 5px;">
+                            ${execution.peak_pattern || 'distributed_24x7'}
+                        </span>
+                        <br/>
+                        <small style="color: #666;">Multiplier: ${execution.peak_multiplier || 1.0}x</small>
+                    </div>
+                    <div>
+                        <strong style="color: #004085;">Verbosity Level:</strong>
+                        <span style="background: #28a745; color: white; padding: 2px 8px; border-radius: 3px; font-size: 0.9em; margin-left: 5px;">
+                            Level ${control.verbosity_level !== undefined ? control.verbosity_level : 1}
+                        </span>
+                        <br/>
+                        <small style="color: #666;">Events per task: ${control.events_per_task || 6}</small>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        html += `
             <div class="summary-grid">
                 <div class="summary-item">
                     <h4>Total CPU</h4>

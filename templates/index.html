@@ -159,6 +159,56 @@
                         </div>
                     </div>
 
+                    <!-- NEW: Phase 1 Parameters -->
+                    <div class="form-section" style="background: #f0f8ff; border-left: 4px solid #007bff;">
+                        <h3>🎯 Advanced Sizing Parameters <span style="background: #007bff; color: white; padding: 2px 8px; border-radius: 3px; font-size: 0.75em; margin-left: 10px;">NEW</span></h3>
+                        <p style="margin-bottom: 15px; color: #666; font-size: 0.9em;">
+                            ⚠️ These parameters have <strong>significant impact</strong> on sizing (2-10x difference). Choose accurately!
+                        </p>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label for="verbosity_level">
+                                    Playbook Verbosity Level
+                                    <span style="color: red; font-weight: bold;">*</span>
+                                </label>
+                                <select id="verbosity_level" name="verbosity_level" required style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                    <option value="0">Level 0 - Minimal (4 events/task) - Production</option>
+                                    <option value="1" selected>Level 1 - Normal (6 events/task) ✓ Recommended</option>
+                                    <option value="2">Level 2 - Verbose (12 events/task)</option>
+                                    <option value="3">Level 3 - Debug (34 events/task)</option>
+                                    <option value="4">Level 4 - Connection Debug (50 events/task)</option>
+                                </select>
+                                <small style="display: block; margin-top: 5px; color: #d9534f;">
+                                    <strong>⚠️ IMPACT:</strong> Debug levels (3-4) increase control plane CPU by 20-35%!
+                                </small>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="peak_pattern">
+                                    Job Distribution Pattern
+                                    <span style="color: red; font-weight: bold;">*</span>
+                                </label>
+                                <select id="peak_pattern" name="peak_pattern" required style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                    <option value="distributed_24x7" selected>Distributed 24/7 (1.0x) ✓ Recommended</option>
+                                    <option value="mixed">Mixed Pattern (1.5x)</option>
+                                    <option value="business_hours">Business Hours 9-5 (2.5x)</option>
+                                    <option value="batch_window">Batch Window 2-4h (10.0x)</option>
+                                </select>
+                                <small style="display: block; margin-top: 5px; color: #d9534f;">
+                                    <strong>⚠️ IMPACT:</strong> Business hours = 2.5x resources! Batch windows = 10x resources!
+                                </small>
+                            </div>
+                        </div>
+
+                        <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 12px; margin-top: 15px;">
+                            <strong style="color: #856404;">💡 How to Choose:</strong>
+                            <ul style="margin: 8px 0 0 20px; color: #856404; font-size: 0.9em;">
+                                <li><strong>Verbosity:</strong> Check your ansible.cfg or job template settings. Production should use 0 or 1.</li>
+                                <li><strong>Pattern:</strong> When do most jobs run? If unsure, check job history for clustering.</li>
+                            </ul>
+                        </div>
+                    </div>
+
                     <div class="form-actions">
                         <button type="submit" class="btn btn-primary">Calculate Sizing</button>
                         <button type="reset" class="btn btn-secondary">Reset Form</button>
