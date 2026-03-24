@@ -43,6 +43,17 @@ All calculations are based on:
 
 ---
 
+## 🚀 Try It Now
+
+### One-Click Deploy (Free Hosting)
+
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/arnav3000/aap-sizing-guide)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/arnav3000/aap-sizing-guide)
+
+Deploy your own instance in seconds! See [DEPLOYMENT.md](DEPLOYMENT.md) for more hosting options.
+
+---
+
 ## Quick Start
 
 ### 1. Install Dependencies
@@ -70,7 +81,7 @@ python app.py
 
 ### 3. Open in Browser
 
-Navigate to: **http://localhost:5001**
+Navigate to: **http://localhost:5002**
 
 ### 4. Use the Calculator
 
@@ -118,7 +129,7 @@ python sizing_calculator.py
 python app.py
 
 # Open in browser
-open http://localhost:5001
+open http://localhost:5002
 ```
 
 **Features:**
@@ -166,12 +177,12 @@ print(recommendation)
 
 ```bash
 # POST to /api/calculate endpoint
-curl -X POST http://localhost:5001/api/calculate \
+curl -X POST http://localhost:5002/api/calculate \
   -H "Content-Type: application/json" \
   -d @your-metrics.json
 
 # GET example data
-curl http://localhost:5001/api/example
+curl http://localhost:5002/api/example
 ```
 
 ---
@@ -611,6 +622,19 @@ This is explicitly stated in the Excel reference (row 54: "AVERAGED RESULT").
 
 ---
 
+## Deployment
+
+This Flask application can be deployed to various free hosting platforms:
+
+- **Railway** - Easiest, 500 hours/month free
+- **Render** - 750 hours/month free
+- **Docker** - Self-hosted container
+- **Fly.io** - 3 free VMs
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment instructions.
+
+---
+
 ## Project Structure
 
 ```
@@ -625,7 +649,11 @@ aap-sizing-guide/
 ├── docs/
 │   ├── AAp-sizing-sheet-reference.xlsx
 │   └── extracted_excel_parameters.json
+├── Dockerfile                     # Docker container config
+├── railway.json                   # Railway deployment config
+├── render.yaml                    # Render deployment config
 ├── requirements.txt
+├── DEPLOYMENT.md                  # Deployment guide
 └── README.md
 ```
 
